@@ -1,5 +1,4 @@
 name: Validate PR Source
-
 on:
   pull_request:
     branches: [ main ]  # Solo PRs hacia main
@@ -9,9 +8,31 @@ jobs:
   validate-source:
     runs-on: ubuntu-latest
     name: Validate PR comes from develop
-    # Condición adicional para asegurar que solo corra para PRs hacia main
+    # Condición MUY estricta para asegurar que SOLO corra para PRs hacia main
     if: github.base_ref == 'main'
     steps:
+    - name: Debug Information
+      run: |
+        echo "🔍 DEBUG INFORMATION:"
+        echo "github.base_ref: '${{ github.base_ref }}'"
+        echo "github.head_ref: '${{ github.head_ref }}'"
+        echo "github.event.pull_request.base.ref: '${{ github.event.pull_request.base.ref }}'"
+        echo "github.event.pull_request.head.ref: '${{ github.event.pull_request.head.ref }}'"
+        echo "Event action: ${{ github.event.action }}"
+        echo ""
+        
+    - name: Early Exit Check
+      run: |
+        if [ "${{ github.base_ref }}" != "main" ]; then
+          echo "⚠️  This workflow should ONLY run for PRs targeting 'main'"
+          echo "⚠️  Current target: ${{ github.base_ref }}"
+          echo "⚠️  Expected target: main"
+          echo "⚠️  EXITING - This workflow should not have triggered!"
+          echo ""
+          echo "::error::Workflow triggered incorrectly. Check your workflow configuration."
+          exit 1
+        fi
+        
     - name: Check PR source branch
       run: |
         echo "🔍 Checking PR source branch..."
@@ -19,16 +40,6 @@ jobs:
         echo "Target branch: ${{ github.base_ref }}"
         echo "Event action: ${{ github.event.action }}"
         echo "Repository default branch: ${{ github.event.repository.default_branch }}"
-        
-        # Verificación de seguridad - solo debe ejecutarse para PRs hacia main
-        if [ "${{ github.base_ref }}" != "main" ]; then
-          echo ""
-          echo "⚠️  WARNING: This workflow should only run for PRs targeting 'main' branch"
-          echo "⚠️  Current target branch: ${{ github.base_ref }}"
-          echo "⚠️  Skipping validation..."
-          echo ""
-          exit 0
-        fi
         
         # Validación principal: el PR hacia main debe venir desde develop
         if [ "${{ github.head_ref }}" != "develop" ]; then
