@@ -8,80 +8,109 @@ jobs:
   validate-source:
     runs-on: ubuntu-latest
     name: Validate PR comes from develop
-    # Doble verificación para asegurar que realmente va hacia main
     if: github.base_ref == 'main'
     steps:
-    - name: Get Current PR Info
-      id: pr_info
+    - name: Checkout Code
+      uses: actions/checkout@v4
+      
+    - name: Get Fresh PR Info
+      id: fresh_pr
       uses: actions/github-script@v7
       with:
+        github-token: ${{ secrets.GITHUB_TOKEN }}
         script: |
+          // Obtener información fresca del PR
           const { data: pr } = await github.rest.pulls.get({
             owner: context.repo.owner,
             repo: context.repo.repo,
             pull_number: context.issue.number
           });
           
-          console.log('PR Info from API:');
-          console.log('- Head branch:', pr.head.ref);
-          console.log('- Base branch:', pr.base.ref);
-          console.log('- PR URL:', pr.html_url);
+          console.log('=== FRESH PR INFO ===');
+          console.log('PR Number:', pr.number);
+          console.log('PR Title:', pr.title);
+          console.log('Head Branch:', pr.head.ref);
+          console.log('Base Branch:', pr.base.ref);
+          console.log('PR State:', pr.state);
+          console.log('PR URL:', pr.html_url);
+          console.log('===================');
+          
+          // También obtener info del repositorio
+          const { data: repo } = await github.rest.repos.get({
+            owner: context.repo.owner,
+            repo: context.repo.repo
+          });
+          
+          console.log('=== REPO INFO ===');
+          console.log('Default Branch:', repo.default_branch);
+          console.log('================');
           
           return {
             head_ref: pr.head.ref,
             base_ref: pr.base.ref,
-            pr_url: pr.html_url
+            pr_number: pr.number,
+            pr_state: pr.state,
+            default_branch: repo.default_branch
           };
     
-    - name: Debug Information
+    - name: Force Debug All Context
       run: |
-        echo "🔍 DEBUG INFORMATION:"
-        echo "Context github.base_ref: '${{ github.base_ref }}'"
-        echo "Context github.head_ref: '${{ github.head_ref }}'"
-        echo "API base_ref: '${{ fromJSON(steps.pr_info.outputs.result).base_ref }}'"
-        echo "API head_ref: '${{ fromJSON(steps.pr_info.outputs.result).head_ref }}'"
-        echo "Event action: ${{ github.event.action }}"
+        echo "=== GITHUB CONTEXT DEBUG ==="
+        echo "github.base_ref: '${{ github.base_ref }}'"
+        echo "github.head_ref: '${{ github.head_ref }}'"
+        echo "github.event.pull_request.base.ref: '${{ github.event.pull_request.base.ref }}'"
+        echo "github.event.pull_request.head.ref: '${{ github.event.pull_request.head.ref }}'"
+        echo "github.event.number: ${{ github.event.number }}"
+        echo "github.event.action: ${{ github.event.action }}"
         echo ""
+        echo "=== FRESH API DATA ==="
+        echo "API Head Branch: ${{ fromJSON(steps.fresh_pr.outputs.result).head_ref }}"
+        echo "API Base Branch: ${{ fromJSON(steps.fresh_pr.outputs.result).base_ref }}"
+        echo "API PR Number: ${{ fromJSON(steps.fresh_pr.outputs.result).pr_number }}"
+        echo "API PR State: ${{ fromJSON(steps.fresh_pr.outputs.result).pr_state }}"
+        echo "Repo Default Branch: ${{ fromJSON(steps.fresh_pr.outputs.result).default_branch }}"
+        echo "=========================="
         
-    - name: Validate Target Branch
+    - name: Validate with Fresh Data
       run: |
-        API_BASE_REF="${{ fromJSON(steps.pr_info.outputs.result).base_ref }}"
-        API_HEAD_REF="${{ fromJSON(steps.pr_info.outputs.result).head_ref }}"
+        FRESH_BASE="${{ fromJSON(steps.fresh_pr.outputs.result).base_ref }}"
+        FRESH_HEAD="${{ fromJSON(steps.fresh_pr.outputs.result).head_ref }}"
         
-        echo "🎯 Current PR target (from API): $API_BASE_REF"
+        echo "🎯 Using FRESH API data for validation"
+        echo "Target Branch: $FRESH_BASE"
+        echo "Source Branch: $FRESH_HEAD"
         
-        # Si el PR realmente NO va hacia main, salir sin error
-        if [ "$API_BASE_REF" != "main" ]; then
+        # Si el PR NO va hacia main, salir exitosamente
+        if [ "$FRESH_BASE" != "main" ]; then
           echo ""
-          echo "✅ PR target is '$API_BASE_REF', not 'main'"
-          echo "✅ This workflow should only validate PRs targeting 'main'"
-          echo "✅ Skipping validation - this is correct GitFlow behavior"
+          echo "✅ SUCCESS: PR targets '$FRESH_BASE', not 'main'"
+          echo "✅ This validation only applies to PRs targeting 'main'"
+          echo "✅ Feature → develop is correct GitFlow behavior"
           echo ""
-          echo "ℹ️  Note: This workflow triggered due to initial configuration,"
-          echo "ℹ️  but the PR target has been changed. This is normal."
           exit 0
         fi
         
-        echo "🔍 PR is targeting 'main' - proceeding with validation..."
+        echo ""
+        echo "🔍 PR targets 'main' - validating source branch..."
         
-        # Validación para PRs hacia main
-        if [ "$API_HEAD_REF" != "develop" ]; then
+        # Para PRs hacia main, validar que vengan de develop
+        if [ "$FRESH_HEAD" != "develop" ]; then
           echo ""
-          echo "❌ ERROR: Pull requests to main branch must come from develop branch only!"
-          echo "❌ Current source branch: $API_HEAD_REF"
-          echo "❌ Expected source branch: develop"
+          echo "❌ ERROR: Pull requests to main must come from develop only!"
+          echo "❌ Current source: $FRESH_HEAD"
+          echo "❌ Expected source: develop"
           echo ""
           echo "🔄 GitFlow Process:"
           echo "1. Close this PR"
-          echo "2. Create PR: $API_HEAD_REF → develop"
-          echo "3. After approval and merge"
-          echo "4. Create PR: develop → main"
+          echo "2. Create: $FRESH_HEAD → develop"
+          echo "3. After merge to develop"
+          echo "4. Create: develop → main"
           echo ""
           exit 1
-        else
-          echo ""
-          echo "✅ SUCCESS: Pull request source validated!"
-          echo "✅ develop → main follows correct GitFlow pattern"
-          echo "✅ This PR is ready for release deployment"
-          echo ""
         fi
+        
+        echo ""
+        echo "✅ SUCCESS: develop → main is valid!"
+        echo "✅ This follows correct GitFlow pattern"
+        echo "✅ Ready for release deployment"
+        echo ""
