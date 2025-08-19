@@ -1,52 +1,172 @@
-name: Validate PR Source
-
+name: Validate GitFlow PR Rules
 on:
   pull_request:
-    branches: [ main ]  # Solo PRs hacia main
+    branches: [ main, develop ]
     types: [opened, synchronize, reopened]
 
 jobs:
-  validate-source:
+  validate-gitflow:
     runs-on: ubuntu-latest
-    name: Validate PR comes from develop
-    # Condición adicional para asegurar que solo corra para PRs hacia main
-    if: github.base_ref == 'main'
+    name: Validate GitFlow PR Rules
     steps:
-    - name: Check PR source branch
+    - name: Checkout Code
+      uses: actions/checkout@v4
+      
+    - name: Validate Workflow Consistency
       run: |
-        echo "🔍 Checking PR source branch..."
-        echo "Source branch: ${{ github.head_ref }}"
-        echo "Target branch: ${{ github.base_ref }}"
-        echo "Event action: ${{ github.event.action }}"
-        echo "Repository default branch: ${{ github.event.repository.default_branch }}"
+        echo "🔍 Validating workflow consistency..."
         
-        # Verificación de seguridad - solo debe ejecutarse para PRs hacia main
-        if [ "${{ github.base_ref }}" != "main" ]; then
-          echo ""
-          echo "⚠️  WARNING: This workflow should only run for PRs targeting 'main' branch"
-          echo "⚠️  Current target branch: ${{ github.base_ref }}"
-          echo "⚠️  Skipping validation..."
-          echo ""
-          exit 0
+        # Verificar que el workflow no esté en estado corrupto
+        if [ "${{ github.event_name }}" = "pull_request" ]; then
+          echo "Event: ${{ github.event_name }}"
+          echo "Base ref: ${{ github.base_ref }}"
+          echo "Head ref: ${{ github.head_ref }}"
+          
+          # Si no hay base_ref, algo está mal
+          if [ -z "${{ github.base_ref }}" ]; then
+            echo "❌ ERROR: github.base_ref está vacío - workflow en estado corrupto"
+            echo "🔧 SOLUCIÓN: Cierra este PR y créalo nuevamente"
+            exit 1
+          fi
         fi
         
-        # Validación principal: el PR hacia main debe venir desde develop
-        if [ "${{ github.head_ref }}" != "develop" ]; then
+        echo "✅ Workflow consistency OK"
+      
+    - name: Get Fresh PR Info
+      id: fresh_pr
+      uses: actions/github-script@v7
+      with:
+        github-token: ${{ secrets.GITHUB_TOKEN }}
+        script: |
+          const { data: pr } = await github.rest.pulls.get({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            pull_number: context.issue.number
+          });
+          
+          console.log('=== FRESH PR INFO ===');
+          console.log('PR Number:', pr.number);
+          console.log('PR Title:', pr.title);
+          console.log('Head Branch:', pr.head.ref);
+          console.log('Base Branch:', pr.base.ref);
+          console.log('PR State:', pr.state);
+          console.log('===================');
+          
+          return {
+            head_ref: pr.head.ref,
+            base_ref: pr.base.ref,
+            pr_number: pr.number,
+            pr_state: pr.state
+          };
+    
+    - name: Debug All Sources
+      run: |
+        echo "=== COMPARISON DEBUG ==="
+        echo "GitHub context base: '${{ github.base_ref }}'"
+        echo "GitHub context head: '${{ github.head_ref }}'"
+        echo "Event base: '${{ github.event.pull_request.base.ref }}'"
+        echo "Event head: '${{ github.event.pull_request.head.ref }}'"
+        echo "API base: '${{ fromJSON(steps.fresh_pr.outputs.result).base_ref }}'"
+        echo "API head: '${{ fromJSON(steps.fresh_pr.outputs.result).head_ref }}'"
+        
+        # Verificar consistencia entre fuentes
+        GITHUB_BASE="${{ github.base_ref }}"
+        EVENT_BASE="${{ github.event.pull_request.base.ref }}"
+        API_BASE="${{ fromJSON(steps.fresh_pr.outputs.result).base_ref }}"
+        
+        if [ "$GITHUB_BASE" != "$EVENT_BASE" ] || [ "$GITHUB_BASE" != "$API_BASE" ]; then
           echo ""
-          echo "❌ ERROR: Pull requests to main branch must come from develop branch only!"
-          echo "❌ Current source branch: ${{ github.head_ref }}"
-          echo "❌ Expected source branch: develop"
+          echo "⚠️  WARNING: Inconsistencia detectada entre fuentes de datos"
+          echo "⚠️  Esto puede indicar workflow en estado corrupto"
+          echo "⚠️  Usando datos de API como fuente de verdad"
           echo ""
-          echo "🔄 Please:"
-          echo "1. Close this PR"
-          echo "2. Merge your changes to develop first"
-          echo "3. Create a new PR from develop to main"
-          echo ""
+        fi
+        echo "========================"
+        
+    - name: Validate GitFlow Rules
+      run: |
+        # Usar API como fuente de verdad (más confiable)
+        FRESH_BASE="${{ fromJSON(steps.fresh_pr.outputs.result).base_ref }}"
+        FRESH_HEAD="${{ fromJSON(steps.fresh_pr.outputs.result).head_ref }}"
+        
+        echo "🎯 Validating GitFlow Rules"
+        echo "Target Branch: $FRESH_BASE"
+        echo "Source Branch: $FRESH_HEAD"
+        echo ""
+        
+        # Validación básica de datos
+        if [ -z "$FRESH_BASE" ] || [ -z "$FRESH_HEAD" ]; then
+          echo "❌ ERROR: No se pudieron obtener datos del PR"
+          echo "❌ Base: '$FRESH_BASE', Head: '$FRESH_HEAD'"
+          echo "🔧 Posible solución: Re-crear el PR"
           exit 1
-        else
-          echo ""
-          echo "✅ SUCCESS: Pull request source validated!"
-          echo "✅ develop → main is allowed"
-          echo "✅ This PR follows the correct GitFlow pattern"
-          echo ""
         fi
+        
+        # Función para verificar si es una rama feature
+        is_feature_branch() {
+          local branch=$1
+          case $branch in
+            feature/*|feature-*) return 0 ;;
+            *) return 1 ;;
+          esac
+        }
+        
+        is_hotfix_branch() {
+          local branch=$1
+          case $branch in
+            hotfix/*|hotfix-*) return 0 ;;
+            *) return 1 ;;
+          esac
+        }
+        
+        # REGLA 1: PRs hacia main solo pueden venir de develop
+        if [ "$FRESH_BASE" = "main" ]; then
+          echo "📋 REGLA: PRs hacia 'main' solo desde 'develop'"
+          
+          if [ "$FRESH_HEAD" != "develop" ]; then
+            echo ""
+            echo "❌ BLOQUEADO: Pull requests hacia 'main' solo pueden venir de 'develop'"
+            echo "❌ Rama origen actual: $FRESH_HEAD"
+            echo "❌ Rama origen requerida: develop"
+            echo ""
+            echo "🔄 Proceso GitFlow correcto:"
+            echo "1. Cerrar este PR"
+            echo "2. Crear: $FRESH_HEAD → develop"  
+            echo "3. Hacer merge a develop"
+            echo "4. Crear: develop → main"
+            echo ""
+            exit 1
+          fi
+          
+          echo "✅ APROBADO: develop → main es válido"
+          echo "✅ Sigue el patrón GitFlow correcto"
+          
+        # REGLA 2: PRs hacia develop desde feature/* o hotfix/*
+        elif [ "$FRESH_BASE" = "develop" ]; then
+          echo "📋 REGLA: PRs hacia 'develop' desde feature/* o hotfix/*"
+          
+          if is_feature_branch "$FRESH_HEAD" || is_hotfix_branch "$FRESH_HEAD"; then
+            echo "✅ APROBADO: $FRESH_HEAD → develop es válido"
+            echo "✅ Tipo de rama permitido para develop"
+          else
+            echo ""
+            echo "❌ BLOQUEADO: PRs hacia 'develop' deben venir de ramas feature/* o hotfix/*"
+            echo "❌ Rama origen actual: $FRESH_HEAD"
+            echo "❌ Tipos válidos: feature/*, hotfix/*"
+            echo ""
+            echo "🔧 Soluciones:"
+            echo "1. Renombrar rama a: feature/$FRESH_HEAD"
+            echo "2. Crear nueva rama feature/ desde $FRESH_HEAD"
+            echo ""
+            exit 1
+          fi
+        
+        # REGLA 3: Otras ramas (sin restricciones por ahora)
+        else
+          echo "📋 INFO: PR hacia rama '$FRESH_BASE'"
+          echo "✅ Sin restricciones GitFlow específicas"
+        fi
+        
+        echo ""
+        echo "🎉 ✅ VALIDACIÓN GITFLOW EXITOSA ✅"
+        echo "🎉 PR cumple con las reglas establecidas"
