@@ -1,14 +1,13 @@
-name: Validate PR Source
+name: Validate GitFlow PR Rules
 on:
   pull_request:
-    branches: [ main ]  # Solo PRs hacia main
+    branches: [ main, develop ]  # Escuchar PRs hacia main Y develop
     types: [opened, synchronize, reopened]
 
 jobs:
-  validate-source:
+  validate-gitflow:
     runs-on: ubuntu-latest
-    name: Validate PR comes from develop
-    if: github.base_ref == 'main'
+    name: Validate GitFlow PR Rules
     steps:
     - name: Checkout Code
       uses: actions/checkout@v4
@@ -35,82 +34,96 @@ jobs:
           console.log('PR URL:', pr.html_url);
           console.log('===================');
           
-          // También obtener info del repositorio
-          const { data: repo } = await github.rest.repos.get({
-            owner: context.repo.owner,
-            repo: context.repo.repo
-          });
-          
-          console.log('=== REPO INFO ===');
-          console.log('Default Branch:', repo.default_branch);
-          console.log('================');
-          
           return {
             head_ref: pr.head.ref,
             base_ref: pr.base.ref,
             pr_number: pr.number,
-            pr_state: pr.state,
-            default_branch: repo.default_branch
+            pr_state: pr.state
           };
     
-    - name: Force Debug All Context
+    - name: Debug Context
       run: |
         echo "=== GITHUB CONTEXT DEBUG ==="
         echo "github.base_ref: '${{ github.base_ref }}'"
         echo "github.head_ref: '${{ github.head_ref }}'"
         echo "github.event.pull_request.base.ref: '${{ github.event.pull_request.base.ref }}'"
         echo "github.event.pull_request.head.ref: '${{ github.event.pull_request.head.ref }}'"
-        echo "github.event.number: ${{ github.event.number }}"
-        echo "github.event.action: ${{ github.event.action }}"
         echo ""
         echo "=== FRESH API DATA ==="
         echo "API Head Branch: ${{ fromJSON(steps.fresh_pr.outputs.result).head_ref }}"
         echo "API Base Branch: ${{ fromJSON(steps.fresh_pr.outputs.result).base_ref }}"
-        echo "API PR Number: ${{ fromJSON(steps.fresh_pr.outputs.result).pr_number }}"
-        echo "API PR State: ${{ fromJSON(steps.fresh_pr.outputs.result).pr_state }}"
-        echo "Repo Default Branch: ${{ fromJSON(steps.fresh_pr.outputs.result).default_branch }}"
         echo "=========================="
         
-    - name: Validate with Fresh Data
+    - name: Validate GitFlow Rules
       run: |
         FRESH_BASE="${{ fromJSON(steps.fresh_pr.outputs.result).base_ref }}"
         FRESH_HEAD="${{ fromJSON(steps.fresh_pr.outputs.result).head_ref }}"
         
-        echo "🎯 Using FRESH API data for validation"
+        echo "🎯 Validating GitFlow Rules"
         echo "Target Branch: $FRESH_BASE"
         echo "Source Branch: $FRESH_HEAD"
+        echo ""
         
-        # Si el PR NO va hacia main, salir exitosamente
-        if [ "$FRESH_BASE" != "main" ]; then
+        # Función para verificar si es una rama feature
+        is_feature_branch() {
+          local branch=$1
+          if [[ $branch == feature/* ]] || [[ $branch =~ ^feature- ]]; then
+            return 0  # true
+          else
+            return 1  # false
+          fi
+        }
+        
+        # REGLA 1: PRs hacia main solo pueden venir de develop
+        if [ "$FRESH_BASE" = "main" ]; then
+          echo "📋 REGLA: PRs hacia 'main' solo desde 'develop'"
+          
+          if [ "$FRESH_HEAD" != "develop" ]; then
+            echo ""
+            echo "❌ ERROR: Pull requests hacia 'main' solo pueden venir de 'develop'!"
+            echo "❌ Fuente actual: $FRESH_HEAD"
+            echo "❌ Fuente requerida: develop"
+            echo ""
+            echo "🔄 Proceso GitFlow correcto:"
+            echo "1. Cerrar este PR"
+            echo "2. Crear: $FRESH_HEAD → develop"
+            echo "3. Después del merge a develop"
+            echo "4. Crear: develop → main"
+            echo ""
+            exit 1
+          fi
+          
+          echo "✅ SUCCESS: develop → main es válido!"
+          echo "✅ Sigue el patrón GitFlow correcto"
           echo ""
-          echo "✅ SUCCESS: PR targets '$FRESH_BASE', not 'main'"
-          echo "✅ This validation only applies to PRs targeting 'main'"
-          echo "✅ Feature → develop is correct GitFlow behavior"
+        
+        # REGLA 2: PRs hacia develop pueden venir de feature/* o hotfix/*
+        elif [ "$FRESH_BASE" = "develop" ]; then
+          echo "📋 REGLA: PRs hacia 'develop' desde feature/* o hotfix/*"
+          
+          # Verificar si viene de una rama válida
+          if is_feature_branch "$FRESH_HEAD" || [[ $FRESH_HEAD == hotfix/* ]] || [[ $FRESH_HEAD =~ ^hotfix- ]]; then
+            echo "✅ SUCCESS: $FRESH_HEAD → develop es válido!"
+            echo "✅ Fuente válida para develop"
+            echo ""
+          else
+            echo ""
+            echo "❌ ERROR: Pull requests hacia 'develop' deben venir de ramas feature/* o hotfix/*"
+            echo "❌ Fuente actual: $FRESH_HEAD"
+            echo "❌ Fuentes válidas: feature/*, hotfix/*"
+            echo ""
+            echo "🔄 Proceso sugerido:"
+            echo "1. Renombrar rama a: feature/$FRESH_HEAD"
+            echo "2. O crear nueva rama feature desde $FRESH_HEAD"
+            echo ""
+            exit 1
+          fi
+        
+        # REGLA 3: Otras ramas target (si las hay)
+        else
+          echo "📋 INFO: PR hacia rama '$FRESH_BASE'"
+          echo "✅ No hay restricciones GitFlow para esta rama"
           echo ""
-          exit 0
         fi
         
-        echo ""
-        echo "🔍 PR targets 'main' - validating source branch..."
-        
-        # Para PRs hacia main, validar que vengan de develop
-        if [ "$FRESH_HEAD" != "develop" ]; then
-          echo ""
-          echo "❌ ERROR: Pull requests to main must come from develop only!"
-          echo "❌ Current source: $FRESH_HEAD"
-          echo "❌ Expected source: develop"
-          echo ""
-          echo "🔄 GitFlow Process:"
-          echo "1. Close this PR"
-          echo "2. Create: $FRESH_HEAD → develop"
-          echo "3. After merge to develop"
-          echo "4. Create: develop → main"
-          echo ""
-          exit 1
-        fi
-        
-        echo ""
-        echo "✅ SUCCESS: develop → main is valid!"
-        echo "✅ This follows correct GitFlow pattern"
-        echo "✅ Ready for release deployment"
-        echo ""
+        echo "🎉 Validación GitFlow completada exitosamente!"
