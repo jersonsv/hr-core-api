@@ -26,7 +26,6 @@ HR-CORE-API/
 │   │   └── EmpleadoService.cs     # Lógica de negocio y acceso a datos
 │   ├── Properties/                # Propiedades del proyecto
 │   ├── API.EMPRESA.CONF.csproj    # Archivo de proyecto
-│   ├── API.EMPRESA.CONF.csproj.user # Configuración de usuario
 │   ├── API.EMPRESA.CONF.http      # Archivo de pruebas HTTP
 │   ├── Program.cs                 # Configuración principal y startup
 │   ├── appsettings.json          # Configuración de producción

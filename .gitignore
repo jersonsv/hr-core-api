@@ -363,3 +363,6 @@ FodyWeavers.xsd
 
 # JetBrains Rider
 *.sln.iml
+
+*.user
+*.csproj.user
